@@ -1,0 +1,192 @@
+name: Build UltimateShop  
+  
+on:  
+  push:  
+    branches: [ main, master, develop ]  
+    paths-ignore:  
+      - '**.md'  
+      - '.gitignore'  
+      - 'LICENSE'  
+  pull_request:  
+    branches: [ main, master ]  
+  release:  
+    types: [ published ]  
+  workflow_dispatch:  
+  
+jobs:  
+  build:  
+    runs-on: ubuntu-latest  
+      
+    strategy:  
+      fail-fast: false  
+      matrix:  
+        java-version: [16, 17, 21]  
+        include:  
+          - java-version: 16  
+            primary: true  
+          - java-version: 17  
+            primary: false  
+          - java-version: 21  
+            primary: false  
+      
+    steps:  
+    - name: Checkout repository  
+      uses: actions/checkout@v4  
+      with:  
+        fetch-depth: 0  
+          
+    - name: Set up JDK ${{ matrix.java-version }}  
+      uses: actions/setup-java@v4  
+      with:  
+        java-version: ${{ matrix.java-version }}  
+        distribution: 'temurin'  
+        cache: 'maven'  
+          
+    - name: Create lib directory structure  
+      run: |  
+        mkdir -p core/lib  
+        mkdir -p .m2/repository  
+          
+    - name: Cache local dependencies  
+      uses: actions/cache@v3  
+      with:  
+        path: |  
+          core/lib  
+          ~/.m2/repository  
+        key: ${{ runner.os }}-deps-${{ hashFiles('**/pom.xml', '**/lib/**') }}  
+        restore-keys: |  
+          ${{ runner.os }}-deps-  
+          ${{ runner.os }}-m2-  
+            
+    - name: Download MythicLib  
+      if: hashFiles('core/lib/MythicLib-dist*.jar') == ''  
+      run: |  
+        echo "Downloading MythicLib..."  
+        curl -L -o core/lib/MythicLib-dist.jar "https://github.com/PhantomTeam/cooldowns/releases/download/1.5.2-SNAPSHOT/MythicLib-dist-1.5.2-SNAPSHOT.jar"  
+          
+    - name: Download MMOItems API  
+      if: hashFiles('core/lib/MMOItems-API*.jar') == ''  
+      run: |  
+        echo "Downloading MMOItems API..."  
+        curl -L -o core/lib/MMOItems-API.jar "https://github.com/MMOItems/MMOItems-API/releases/download/6.9.2-SNAPSHOT/MMOItems-API-6.9.2-SNAPSHOT.jar"  
+          
+    - name: Download additional dependencies  
+      run: |  
+        # Download other required dependencies if needed  
+        if [ ! -f "core/lib/LegacyCodesCompatibility.jar" ]; then  
+          echo "Creating placeholder for LegacyCodesCompatibility.jar"  
+          touch core/lib/LegacyCodesCompatibility.jar  
+        fi  
+          
+    - name: Verify dependencies  
+      run: |  
+        echo "Checking required dependencies..."  
+        ls -la core/lib/  
+        if [ ! -f "core/lib/MythicLib-dist.jar" ]; then  
+          echo "MythicLib not found!"  
+          exit 1  
+        fi  
+          
+    - name: Set Maven options  
+      run: |  
+        echo "MAVEN_OPTS=-Xmx2g -XX:MaxMetaspaceSize=512m" >> $GITHUB_ENV  
+          
+    - name: Build with Maven  
+      run: |  
+        mvn clean package \  
+          --batch-mode \  
+          --no-transfer-progress \  
+          -Dmaven.test.skip=true \  
+          -Dmaven.javadoc.skip=true \  
+          -Dmaven.source.skip=true \  
+          -Dmaven.compiler.fork=true \  
+          -Dmaven.compiler.maxmem=2048m  
+            
+    - name: Verify build artifacts  
+      run: |  
+        echo "Checking build artifacts..."  
+        ls -la plugin/target/  
+        if [ ! -f "plugin/target/UltimateShop-4.2.1.jar" ]; then  
+          echo "Build artifact not found!"  
+          exit 1  
+        fi  
+          
+    - name: Get plugin version  
+      id: version  
+      run: |  
+        VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)  
+        echo "version=$VERSION" >> $GITHUB_OUTPUT  
+          
+    - name: Upload build artifacts  
+      uses: actions/upload-artifact@v3  
+      with:  
+        name: UltimateShop-${{ steps.version.outputs.version }}-Java${{ matrix.java-version }}  
+        path: |  
+          plugin/target/UltimateShop-*.jar  
+          core/target/*.jar  
+          paper/target/*.jar  
+          spigot/target/*.jar  
+        retention-days: 30  
+          
+    - name: Upload primary build artifact  
+      if: matrix.primary  
+      uses: actions/upload-artifact@v3  
+      with:  
+        name: UltimateShop-latest  
+        path: plugin/target/UltimateShop-*.jar  
+        retention-days: 90  
+          
+    - name: Generate build summary  
+      if: matrix.primary  
+      run: |  
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Java Version**: ${{ matrix.java-version }}" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Build Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Artifact Size**: $(du -h plugin/target/UltimateShop-*.jar | cut -f1)" >> $GITHUB_STEP_SUMMARY  
+          
+    - name: Upload release asset  
+      if: github.event_name == 'release' && matrix.primary  
+      uses: actions/upload-release-asset@v1  
+      env:  
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+      with:  
+        upload_url: ${{ github.event.release.upload_url }}  
+        asset_path: plugin/target/UltimateShop-4.2.1.jar  
+        asset_name: UltimateShop-${{ steps.version.outputs.version }}.jar  
+        asset_content_type: application/java-archive  
+          
+    - name: Notify build status  
+      if: failure()  
+      run: |  
+        echo "❌ Build failed for Java ${{ matrix.java-version }}"  
+        echo "Check the logs for more details."  
+  
+  # Additional job for running tests  
+  test:  
+    runs-on: ubuntu-latest  
+    needs: build  
+    if: github.event_name == 'pull_request'  
+      
+    steps:  
+    - name: Checkout repository  
+      uses: actions/checkout@v4  
+        
+    - name: Set up JDK 17  
+      uses: actions/setup-java@v4  
+      with:  
+        java-version: 17  
+        distribution: 'temurin'  
+        cache: 'maven'  
+          
+    - name: Run tests  
+      run: mvn test --batch-mode --no-transfer-progress  
+        
+    - name: Upload test results  
+      uses: actions/upload-artifact@v3  
+      if: always()  
+      with:  
+        name: test-results  
+        path: |  
+          **/target/surefire-reports/  
+          **/target/failsafe-reports/
