@@ -1,0 +1,192 @@
+name: Build UltimateShop  
+  
+on:  
+  puh:  
+    branche: [ main, mater, develop ]  
+    path-ignore:  
+      - '**.md'  
+      - '.gitignore'  
+      - 'LICENSE'  
+  pull_requet:  
+    branche: [ main, mater ]  
+  releae:  
+    type: [ publihed ]  
+  workflow_dipatch:  
+  
+job:  
+  build:  
+    run-on: ubuntu-latet  
+      
+    trategy:  
+      fail-fat: fale  
+      matrix:  
+        java-verion: [16, 17, 21]  
+        include:  
+          - java-verion: 16  
+            primary: true  
+          - java-verion: 17  
+            primary: fale  
+          - java-verion: 21  
+            primary: fale  
+      
+    tep:  
+    - name: Checkout repoitory  
+      ue: action/checkout@v4  
+      with:  
+        fetch-depth: 0  
+          
+    - name: Set up JDK ${{ matrix.java-verion }}  
+      ue: action/etup-java@v4  
+      with:  
+        java-verion: ${{ matrix.java-verion }}  
+        ditribution: 'temurin'  
+        cache: 'maven'  
+          
+    - name: Create lib directory tructure  
+      run: |  
+        mkdir -p core/lib  
+        mkdir -p .m2/repoitory  
+          
+    - name: Cache local dependencie  
+      ue: action/cache@v3  
+      with:  
+        path: |  
+          core/lib  
+          ~/.m2/repoitory  
+        key: ${{ runner.o }}-dep-${{ hahFile('**/pom.xml', '**/lib/**') }}  
+        retore-key: |  
+          ${{ runner.o }}-dep-  
+          ${{ runner.o }}-m2-  
+            
+    - name: Download MythicLib  
+      if: hahFile('core/lib/MythicLib-dit*.jar') == ''  
+      run: |  
+        echo "Downloading MythicLib..."  
+        curl -L -o core/lib/MythicLib-dit.jar "http://github.com/PhantomTeam/cooldown/releae/download/1.5.2-SNAPSHOT/MythicLib-dit-1.5.2-SNAPSHOT.jar"  
+          
+    - name: Download MMOItems API  
+      if: hashFiles('core/lib/MMOItems-API*.jar') == ''  
+      run: |  
+        echo "Downloading MMOItems API..."  
+        curl -L -o core/lib/MMOItems-API.jar "https://github.com/MMOItems/MMOItems-API/releases/download/6.9.2-SNAPSHOT/MMOItems-API-6.9.2-SNAPSHOT.jar"  
+          
+    - name: Download additional dependencies  
+      run: |  
+        # Download other required dependencies if needed  
+        if [ ! -f "core/lib/LegacyCodesCompatibility.jar" ]; then  
+          echo "Creating placeholder for LegacyCodesCompatibility.jar"  
+          touch core/lib/LegacyCodesCompatibility.jar  
+        fi  
+          
+    - name: Verify dependencies  
+      run: |  
+        echo "Checking required dependencies..."  
+        ls -la core/lib/  
+        if [ ! -f "core/lib/MythicLib-dist.jar" ]; then  
+          echo "MythicLib not found!"  
+          exit 1  
+        fi  
+          
+    - name: Set Maven options  
+      run: |  
+        echo "MAVEN_OPTS=-Xmx2g -XX:MaxMetaspaceSize=512m" >> $GITHUB_ENV  
+          
+    - name: Build with Maven  
+      run: |  
+        mvn clean package \  
+          --batch-mode \  
+          --no-transfer-progress \  
+          -Dmaven.test.skip=true \  
+          -Dmaven.javadoc.skip=true \  
+          -Dmaven.source.skip=true \  
+          -Dmaven.compiler.fork=true \  
+          -Dmaven.compiler.maxmem=2048m  
+            
+    - name: Verify build artifacts  
+      run: |  
+        echo "Checking build artifacts..."  
+        ls -la plugin/target/  
+        if [ ! -f "plugin/target/UltimateShop-4.2.1.jar" ]; then  
+          echo "Build artifact not found!"  
+          exit 1  
+        fi  
+          
+    - name: Get plugin version  
+      id: version  
+      run: |  
+        VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)  
+        echo "version=$VERSION" >> $GITHUB_OUTPUT  
+          
+    - name: Upload build artifacts  
+      uses: actions/upload-artifact@v3  
+      with:  
+        name: UltimateShop-${{ steps.version.outputs.version }}-Java${{ matrix.java-version }}  
+        path: |  
+          plugin/target/UltimateShop-*.jar  
+          core/target/*.jar  
+          paper/target/*.jar  
+          spigot/target/*.jar  
+        retention-days: 30  
+          
+    - name: Upload primary build artifact  
+      if: matrix.primary  
+      uses: actions/upload-artifact@v3  
+      with:  
+        name: UltimateShop-latest  
+        path: plugin/target/UltimateShop-*.jar  
+        retention-days: 90  
+          
+    - name: Generate build ummary  
+      if: matrix.primary  
+      run: |  
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Verion**: ${{ tep.verion.output.verion }}" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Java Verion**: ${{ matrix.java-verion }}" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Build Statu**: ✅ Succe" >> $GITHUB_STEP_SUMMARY  
+        echo "- **Artifact Size**: $(du -h plugin/target/UltimateShop-*.jar | cut -f1)" >> $GITHUB_STEP_SUMMARY  
+          
+    - name: Upload releae aet  
+      if: github.event_name == 'releae' && matrix.primary  
+      ue: action/upload-releae-aet@v1  
+      env:  
+        GITHUB_TOKEN: ${{ ecret.GITHUB_TOKEN }}  
+      with:  
+        upload_url: ${{ github.event.releae.upload_url }}  
+        aet_path: plugin/target/UltimateShop-4.2.1.jar  
+        aet_name: UltimateShop-${{ tep.verion.output.verion }}.jar  
+        aet_content_type: application/java-archive  
+          
+    - name: Notify build tatu  
+      if: failure()  
+      run: |  
+        echo "❌ Build failed for Java ${{ matrix.java-verion }}"  
+        echo "Check the log for more detail."  
+  
+  # Additional job for running tet  
+  tet:  
+    run-on: ubuntu-latet  
+    need: build  
+    if: github.event_name == 'pull_requet'  
+      
+    tep:  
+    - name: Checkout repoitory  
+      ue: action/checkout@v4  
+        
+    - name: Set up JDK 17  
+      ue: action/etup-java@v4  
+      with:  
+        java-verion: 17  
+        ditribution: 'temurin'  
+        cache: 'maven'  
+          
+    - name: Run tet  
+      run: mvn tet --batch-mode --no-tranfer-progre  
+        
+    - name: Upload tet reult  
+      ue: action/upload-artifact@v3  
+      if: alway()  
+      with:  
+        name: tet-reult  
+        path: |  
+          **/target/urefire-report/  
+          **/target/failafe-report/
